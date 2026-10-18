@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/expense_item.dart';
 import '../services/database_service.dart';
@@ -73,11 +72,11 @@ class ExpenseNotifier extends StateNotifier<ExpenseState> {
   }
 
   /// Quét ảnh bằng ML Kit OCR offline -> bóc tách qua Regex Engine -> trả về dữ liệu đề xuất
-  Future<ParsedReceiptData?> processImageWithOcr(File imageFile) async {
+  Future<ParsedReceiptData?> processImageWithOcr(String imagePath) async {
     state = state.copyWith(isScanning: true);
     try {
-      // 1. Nhận diện chữ On-device ML Kit
-      final rawText = await _ocrService.recognizeTextFromImage(imageFile);
+      // 1. Nhận diện chữ On-device ML Kit (hoặc Web simulator)
+      final rawText = await _ocrService.recognizeTextFromImagePath(imagePath);
       // 2. Chạy Dart Regex Engine
       final parsed = RegexParserEngine.parse(rawText);
       state = state.copyWith(isScanning: false);

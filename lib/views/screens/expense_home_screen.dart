@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
@@ -28,8 +27,7 @@ class _ExpenseHomeScreenState extends ConsumerState<ExpenseHomeScreen> {
         imageQuality: 85,
       );
       if (pickedFile == null) return;
-
-      final file = File(pickedFile.path);
+      final imagePath = pickedFile.path;
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -38,22 +36,22 @@ class _ExpenseHomeScreenState extends ConsumerState<ExpenseHomeScreen> {
             children: [
               CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
               SizedBox(width: 16),
-              Text('Đang quét OCR trên thiết bị (ML Kit)...'),
+              Text('Đang xử lý hóa đơn...'),
             ],
           ),
           duration: Duration(seconds: 2),
         ),
       );
 
-      // Gọi qua Riverpod Notifier để chạy Google ML Kit & Regex Parser
-      final parsed = await ref.read(expenseProvider.notifier).processImageWithOcr(file);
+      // Gọi qua Riverpod Notifier để chạy Google ML Kit (hoặc Web fallback) & Regex Parser
+      final parsed = await ref.read(expenseProvider.notifier).processImageWithOcr(imagePath);
 
       if (parsed != null && mounted) {
         showDialog(
           context: context,
           builder: (ctx) => ReviewExpenseDialog(
             initialData: parsed,
-            imageFile: file,
+            imagePath: imagePath,
             onSave: (newItem) {
               ref.read(expenseProvider.notifier).addExpense(newItem);
               ScaffoldMessenger.of(context).showSnackBar(

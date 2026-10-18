@@ -1,16 +1,49 @@
-import 'package:path/path.dart';
+import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 import '../models/expense_item.dart';
 
 /// Dịch vụ quản lý Cơ sở dữ liệu SQLite cục bộ (sqflite)
-/// Đảm bảo ứng dụng hoạt động 100% OFFLINE không cần internet.
+/// - Trên Mobile: Chạy 100% OFFLINE với sqflite database
+/// - Trên Web / Cloudflare: Chạy In-Memory Storage tương thích đa nền tảng
 class DatabaseService {
   DatabaseService._init();
   static final DatabaseService instance = DatabaseService._init();
 
   static Database? _database;
 
+  // Bộ nhớ tạm trên Web (Fallback khi chạy trên Cloudflare Pages/Web)
+  final List<ExpenseItem> _webItems = [
+    ExpenseItem(
+      id: 'demo_1',
+      title: 'Highlands Coffee VKU',
+      amount: 65000.0,
+      timestamp: DateTime.now().subtract(const Duration(hours: 3)),
+      category: ExpenseCategory.food,
+      rawOcrText: 'HIGHLANDS COFFEE\nTong cong: 65.000 VND',
+    ),
+    ExpenseItem(
+      id: 'demo_2',
+      title: 'Đổ xăng Petrolimex',
+      amount: 50000.0,
+      timestamp: DateTime.now().subtract(const Duration(days: 1)),
+      category: ExpenseCategory.transport,
+      rawOcrText: 'PETROLIMEX\nTong thanh toan: 50.000 đ',
+    ),
+    ExpenseItem(
+      id: 'demo_3',
+      title: 'Sách giáo trình VKU',
+      amount: 120000.0,
+      timestamp: DateTime.now().subtract(const Duration(days: 2)),
+      category: ExpenseCategory.shopping,
+      rawOcrText: 'NHA SACH VKU\nThanh tien: 120.000 đ',
+    ),
+  ];
+
   Future<Database> get database async {
+    if (kIsWeb) {
+      throw UnsupportedError('sqflite does not run on web directly.');
+    }
     if (_database != null) return _database!;
     _database = await _initDB('vku_expenses.db');
     return _database!;
@@ -18,7 +51,7 @@ class DatabaseService {
 
   Future<Database> _initDB(String filePath) async {
     final dbPath = await getDatabasesPath();
-    final path = join(dbPath, filePath);
+    final path = p.join(dbPath, filePath);
 
     return await openDatabase(
       path,
@@ -45,6 +78,11 @@ class DatabaseService {
 
   /// Thêm mới một khoản chi tiêu
   Future<int> insertExpense(ExpenseItem item) async {
+    if (kIsWeb) {
+      _webItems.removeWhere((e) => e.id == item.id);
+      _webItems.insert(0, item);
+      return 1;
+    }
     final db = await database;
     return await db.insert(
       'expenses',
@@ -55,6 +93,10 @@ class DatabaseService {
 
   /// Lấy danh sách tất cả các khoản chi, sắp xếp theo thời gian mới nhất trước
   Future<List<ExpenseItem>> getAllExpenses() async {
+    if (kIsWeb) {
+      _webItems.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+      return List.unmodifiable(_webItems);
+    }
     final db = await database;
     final maps = await db.query(
       'expenses',
@@ -66,6 +108,13 @@ class DatabaseService {
 
   /// Cập nhật thông tin chi tiêu sau khi người dùng sửa thủ công
   Future<int> updateExpense(ExpenseItem item) async {
+    if (kIsWeb) {
+      final idx = _webItems.indexWhere((e) => e.id == item.id);
+      if (idx != -1) {
+        _webItems[idx] = item;
+      }
+      return 1;
+    }
     final db = await database;
     return await db.update(
       'expenses',
@@ -77,6 +126,10 @@ class DatabaseService {
 
   /// Xóa khoản chi tiêu theo ID
   Future<int> deleteExpense(String id) async {
+    if (kIsWeb) {
+      _webItems.removeWhere((e) => e.id == id);
+      return 1;
+    }
     final db = await database;
     return await db.delete(
       'expenses',
@@ -89,6 +142,14 @@ class DatabaseService {
 
   /// Thống kê tỷ trọng chi tiêu theo từng danh mục (Dành cho Biểu đồ Donut Chart)
   Future<Map<ExpenseCategory, double>> getCategoryBreakdown() async {
+    if (kIsWeb) {
+      final breakdown = <ExpenseCategory, double>{};
+      for (final item in _webItems) {
+        breakdown[item.category] = (breakdown[item.category] ?? 0.0) + item.amount;
+      }
+      return breakdown;
+    }
+
     final db = await database;
     final result = await db.rawQuery('''
       SELECT category, SUM(amount) as total
@@ -107,8 +168,21 @@ class DatabaseService {
 
   /// Thống kê chi tiêu của 7 ngày gần nhất (Dành cho Weekly Bar Chart)
   Future<Map<int, double>> getWeeklyExpenses() async {
-    final db = await database;
     final now = DateTime.now();
+    final Map<int, double> dailyTotals = {for (int i = 0; i < 7; i++) i: 0.0};
+
+    if (kIsWeb) {
+      for (final item in _webItems) {
+        final diffDays = now.difference(item.timestamp).inDays;
+        final dayIndex = 6 - diffDays;
+        if (dayIndex >= 0 && dayIndex < 7) {
+          dailyTotals[dayIndex] = (dailyTotals[dayIndex] ?? 0.0) + item.amount;
+        }
+      }
+      return dailyTotals;
+    }
+
+    final db = await database;
     final sevenDaysAgo = now.subtract(const Duration(days: 6));
     final startDay = DateTime(sevenDaysAgo.year, sevenDaysAgo.month, sevenDaysAgo.day);
 
@@ -117,9 +191,6 @@ class DatabaseService {
       FROM expenses
       WHERE timestamp >= ?
     ''', [startDay.toIso8601String()]);
-
-    // Map 0..6 tương ứng từ (hôm nay - 6 ngày) đến hôm nay
-    final Map<int, double> dailyTotals = {for (int i = 0; i < 7; i++) i: 0.0};
 
     for (final row in result) {
       final date = DateTime.tryParse(row['timestamp'] as String? ?? '');
@@ -138,7 +209,9 @@ class DatabaseService {
 
   /// Đóng kết nối database
   Future<void> close() async {
-    final db = await database;
-    db.close();
+    if (!kIsWeb && _database != null) {
+      final db = await database;
+      db.close();
+    }
   }
 }

@@ -1,4 +1,5 @@
-import 'dart:io';
+import 'dart:io' as io;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../models/expense_item.dart';
@@ -8,13 +9,13 @@ import '../../services/regex_parser_engine.dart';
 /// Cho phép người dùng kiểm tra lại thông tin máy vừa bóc tách và sửa tay trước khi lưu SQLite
 class ReviewExpenseDialog extends StatefulWidget {
   final ParsedReceiptData initialData;
-  final File? imageFile;
+  final String? imagePath;
   final Function(ExpenseItem item) onSave;
 
   const ReviewExpenseDialog({
     super.key,
     required this.initialData,
-    this.imageFile,
+    this.imagePath,
     required this.onSave,
   });
 
@@ -74,18 +75,29 @@ class _ReviewExpenseDialogState extends State<ReviewExpenseDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Preview ảnh hóa đơn nếu có
-            if (widget.imageFile != null)
+            // Preview ảnh hóa đơn nếu có (tương thích cả Web lẫn Mobile)
+            if (widget.imagePath != null && widget.imagePath!.isNotEmpty)
               ClipRRect(
                 borderRadius: BorderRadius.circular(10),
                 child: Container(
                   height: 120,
                   width: double.infinity,
                   color: Colors.grey.shade200,
-                  child: Image.file(
-                    widget.imageFile!,
-                    fit: BoxFit.cover,
-                  ),
+                  child: kIsWeb
+                      ? Image.network(
+                          widget.imagePath!,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => const Center(
+                            child: Icon(Icons.receipt_long, size: 48, color: Colors.grey),
+                          ),
+                        )
+                      : Image.file(
+                          io.File(widget.imagePath!),
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => const Center(
+                            child: Icon(Icons.receipt_long, size: 48, color: Colors.grey),
+                          ),
+                        ),
                 ),
               ),
             const SizedBox(height: 12),
@@ -173,7 +185,7 @@ class _ReviewExpenseDialogState extends State<ReviewExpenseDialog> {
                   : _merchantController.text.trim(),
               amount: amt,
               category: _selectedCategory,
-              imagePath: widget.imageFile?.path,
+              imagePath: widget.imagePath,
             );
             widget.onSave(item);
             Navigator.of(context).pop();
