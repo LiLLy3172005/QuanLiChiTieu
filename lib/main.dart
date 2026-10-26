@@ -1,12 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'views/screens/ai_advisor_screen.dart';
-import 'views/screens/expense_home_screen.dart';
-import 'views/screens/reports_screen.dart';
+import 'router/app_router.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  // Khởi chạy ứng dụng bọc trong ProviderScope của Riverpod 2 (Slide 42)
+  // Khởi chạy ứng dụng bọc trong ProviderScope của Riverpod 2 (Slide 10 & 14 VKU Week 8)
   runApp(
     const ProviderScope(
       child: ExpenseTrackerApp(),
@@ -14,7 +12,8 @@ void main() {
   );
 }
 
-/// Ứng dụng chính tuân thủ Material Design 3 và VKU Navy Brand Color (Slide 32 VKU)
+/// Ứng dụng chính tuân thủ Material Design 3, VKU Navy Brand Color (Slide 32)
+/// Kết nối Declarative Routing với MaterialApp.router(routerConfig: appRouter) (Slide 21 VKU Week 8)
 class ExpenseTrackerApp extends StatelessWidget {
   const ExpenseTrackerApp({super.key});
 
@@ -22,9 +21,10 @@ class ExpenseTrackerApp extends StatelessWidget {
   Widget build(BuildContext context) {
     const seedColor = Color(0xFF2C4570); // VKU Navy
 
-    return MaterialApp(
-      title: 'VKU Expense OCR & AI Tracker',
+    return MaterialApp.router(
+      title: 'VKU Expense & Income Tracker',
       debugShowCheckedModeBanner: false,
+      routerConfig: appRouter, // GoRouter config (Slide 21)
 
       // Theme Sáng (Light Theme Material 3)
       theme: ThemeData(
@@ -52,61 +52,7 @@ class ExpenseTrackerApp extends StatelessWidget {
         ),
       ),
 
-      themeMode: ThemeMode.system, // Tự động thích ứng theo chế độ máy
-
-      home: const MainNavigationShell(),
-    );
-  }
-}
-
-/// Shell chứa thanh NavigationBar 3 tab chính (Slide 33 & 34 Scaffold Structure)
-class MainNavigationShell extends StatefulWidget {
-  const MainNavigationShell({super.key});
-
-  @override
-  State<MainNavigationShell> createState() => _MainNavigationShellState();
-}
-
-class _MainNavigationShellState extends State<MainNavigationShell> {
-  int _currentIndex = 0;
-
-  final List<Widget> _screens = const [
-    ExpenseHomeScreen(),
-    ReportsScreen(),
-    AiAdvisorScreen(),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      // Giữ trạng thái các tab không bị rebuild liên tục
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _screens,
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        onDestinationSelected: (index) {
-          setState(() => _currentIndex = index);
-        },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.receipt_long_outlined),
-            selectedIcon: Icon(Icons.receipt_long),
-            label: 'Chi tiêu',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.pie_chart_outline),
-            selectedIcon: Icon(Icons.pie_chart),
-            label: 'Báo cáo',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.auto_awesome_outlined),
-            selectedIcon: Icon(Icons.auto_awesome),
-            label: 'Gemini AI',
-          ),
-        ],
-      ),
+      themeMode: ThemeMode.system, // Tự động thích ứng Light/Dark mode
     );
   }
 }

@@ -8,6 +8,8 @@ void main() {
       expect(ExpenseCategory.transport.vietnameseName, equals('Di chuyển'));
       expect(ExpenseCategory.shopping.vietnameseName, equals('Mua sắm'));
       expect(ExpenseCategory.utilities.vietnameseName, equals('Hóa đơn & Điện nước'));
+      expect(ExpenseCategory.salary.vietnameseName, equals('Lương'));
+      expect(ExpenseCategory.allowance.vietnameseName, equals('Trợ cấp / Ba mẹ gửi'));
     });
 
     test('2. Chuyển đổi qua lại giữa ExpenseItem và Map SQLite', () {
@@ -18,6 +20,7 @@ void main() {
         amount: 25000.0,
         timestamp: now,
         category: ExpenseCategory.food,
+        type: TransactionType.expense,
         rawOcrText: 'Ca phe muoi 25.000',
       );
 
@@ -26,6 +29,7 @@ void main() {
       expect(map['title'], equals('Cà phê muối VKU'));
       expect(map['amount'], equals(25000.0));
       expect(map['category'], equals('food'));
+      expect(map['type'], equals('expense'));
 
       // Phục hồi từ Map
       final restored = ExpenseItem.fromMap(map);
@@ -33,18 +37,31 @@ void main() {
       expect(restored.title, equals(item.title));
       expect(restored.amount, equals(item.amount));
       expect(restored.category, equals(ExpenseCategory.food));
+      expect(restored.type, equals(TransactionType.expense));
     });
 
     test('3. Immutability copyWith method', () {
       final item = ExpenseItem.draft(
         title: 'Trà sữa',
         amount: 30000.0,
+        type: TransactionType.expense,
       );
 
-      final updated = item.copyWith(amount: 35000.0);
+      final updated = item.copyWith(amount: 35000.0, type: TransactionType.income);
       expect(updated.title, equals('Trà sữa'));
       expect(updated.amount, equals(35000.0));
+      expect(updated.type, equals(TransactionType.income));
       expect(item.amount, equals(30000.0)); // Bản gốc không đổi
+      expect(item.type, equals(TransactionType.expense));
+    });
+
+    test('4. Kiểm thử TransactionType Switch Expressions & isIncomeCategory', () {
+      expect(TransactionType.expense.vietnameseName, equals('Khoản chi'));
+      expect(TransactionType.income.vietnameseName, equals('Khoản thu'));
+      expect(ExpenseCategory.salary.isIncomeCategory, isTrue);
+      expect(ExpenseCategory.bonus.isIncomeCategory, isTrue);
+      expect(ExpenseCategory.allowance.isIncomeCategory, isTrue);
+      expect(ExpenseCategory.food.isIncomeCategory, isFalse);
     });
   });
 }

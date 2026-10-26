@@ -2,10 +2,9 @@ import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:intl/intl.dart';
 import '../models/expense_item.dart';
 
-/// Dịch vụ Trí tuệ nhân tạo Gemini AI phân tích chi tiêu và tư vấn tiết kiệm tài chính
+/// Dịch vụ Trí tuệ nhân tạo Gemini AI phân tích thu chi và tư vấn tiết kiệm tài chính
 /// Tích hợp Gemini API với chế độ Fallback tư vấn Rule-based khi OFFLINE không có mạng.
 class GeminiService {
-  // Người dùng có thể truyền vào Gemini API Key cá nhân
   final String? apiKey;
   GenerativeModel? _model;
 
@@ -18,25 +17,30 @@ class GeminiService {
     }
   }
 
-  /// Phân tích dữ liệu chi tiêu và đưa ra chiến lược tiết kiệm tài chính cá nhân
+  /// Phân tích dữ liệu Thu - Chi và đưa ra chiến lược tiết kiệm tài chính cá nhân
   Future<String> analyzeExpensesAndAdvise(
-    List<ExpenseItem> expenses, {
+    List<ExpenseItem> items, {
     String? userQuestion,
   }) async {
-    if (expenses.isEmpty) {
-      return 'Bạn chưa có khoản chi tiêu nào được ghi nhận. Hãy quét hoặc nhập một số hóa đơn để AI phân tích nhé!';
+    if (items.isEmpty) {
+      return 'Bạn chưa có giao dịch nào được ghi nhận. Hãy quét hoặc nhập một số khoản thu/chi để AI phân tích nhé!';
     }
 
     final currencyFormat = NumberFormat.currency(locale: 'vi_VN', symbol: 'đ');
-    final totalSpent = expenses.fold<double>(0, (sum, item) => sum + item.amount);
+    final totalExpense = items.where((e) => e.isExpense).fold<double>(0, (sum, i) => sum + i.amount);
+    final totalIncome = items.where((e) => e.isIncome).fold<double>(0, (sum, i) => sum + i.amount);
+    final netBalance = totalIncome - totalExpense;
 
-    // Chuẩn bị tóm tắt danh sách chi tiêu để gửi cho Gemini
+    // Chuẩn bị tóm tắt danh sách Thu - Chi gần đây
     final summaryBuffer = StringBuffer();
-    summaryBuffer.writeln('Tổng chi tiêu: ${currencyFormat.format(totalSpent)}');
-    summaryBuffer.writeln('Chi tiết các khoản chi tiêu gần đây:');
-    for (final exp in expenses.take(15)) {
+    summaryBuffer.writeln('💰 TỔNG THU NHẬP: ${currencyFormat.format(totalIncome)}');
+    summaryBuffer.writeln('💸 TỔNG CHI TIÊU: ${currencyFormat.format(totalExpense)}');
+    summaryBuffer.writeln('⚖️ SỐ DƯ RÒNG: ${currencyFormat.format(netBalance)}');
+    summaryBuffer.writeln('\nChi tiết các giao dịch gần đây:');
+    for (final tx in items.take(15)) {
+      final sign = tx.isIncome ? '[+ THU]' : '[- CHI]';
       summaryBuffer.writeln(
-        '- Ngày ${DateFormat('dd/MM/yyyy').format(exp.timestamp)}: ${exp.title} (${exp.category.vietnameseName}) - ${currencyFormat.format(exp.amount)}',
+        '- Ngày ${DateFormat('dd/MM/yyyy').format(tx.timestamp)}: $sign ${tx.title} (${tx.category.vietnameseName}) - ${currencyFormat.format(tx.amount)}',
       );
     }
 
@@ -45,45 +49,44 @@ class GeminiService {
       try {
         final prompt = '''
 Bạn là chuyên gia cố vấn tài chính cá nhân thông minh, thân thiện dành cho sinh viên và người trẻ tại Việt Nam.
-Dưới đây là lịch sử chi tiêu thực tế được trích xuất từ hóa đơn và tin nhắn ngân hàng của người dùng:
+Dưới đây là báo cáo lịch sử Thu nhập và Chi tiêu thực tế từ hóa đơn & SMS ngân hàng của người dùng:
 
 $summaryBuffer
 
-Câu hỏi của người dùng (nếu có): ${userQuestion ?? 'Hãy phân tích tình hình tài chính của tôi và hướng dẫn cụ thể cách tiết kiệm tiền.'}
+Câu hỏi của người dùng (nếu có): ${userQuestion ?? 'Hãy phân tích tình hình tài chính tổng thể của tôi, so sánh Thu - Chi và hướng dẫn cụ thể cách tiết kiệm tiền.'}
 
 Hãy trả lời theo cấu trúc sau:
-1. 📊 **Đánh giá tổng quan**: Phân tích danh mục nào đang chiếm tỷ trọng lớn nhất và có dấu hiệu bất thường không.
-2. ⚠️ **Cảnh báo các khoản chi dễ cắt giảm**: Chỉ ra 1-2 khoản chi tiêu không thiết yếu.
-3. 💡 **3 Lời khuyên tiết kiệm thiết thực**: Áp dụng quy tắc tài chính thực tế (ví dụ quy tắc 50/30/20, hạn chế ăn ngoài, săn mã giảm giá, v.v.).
-Hãy dùng phong cách động viên, gần gũi, súc tích bằng tiếng Việt.
+1. 📊 **Đánh giá cán cân Thu - Chi**: Đánh giá số dư ròng và tỷ lệ tiết kiệm (Thu nhập - Chi tiêu).
+2. ⚠️ **Cảnh báo danh mục chi tiêu cần tối ưu**: Chỉ ra nhóm chi tiêu đang chiếm tỷ lệ quá cao hoặc không cần thiết.
+3. 💡 **3 Lời khuyên tài chính thiết thực**: Áp dụng quy tắc 50/30/20 hoặc 6 chiếc lọ tài chính, cách gia tăng nguồn thu phụ hoặc cắt giảm lãng phí.
+Phong cách gần gũi, súc tích bằng tiếng Việt.
 ''';
 
         final response = await _model!.generateContent([Content.text(prompt)]);
         if (response.text != null && response.text!.isNotEmpty) {
           return response.text!;
         }
-      } catch (e) {
-        // Gặp lỗi mạng hoặc lỗi API -> Tự động chuyển sang Bộ tư vấn Offline
-      }
+      } catch (_) {}
     }
 
     // Chế độ FALLBACK OFFLINE (Hoạt động hoàn toàn không cần Internet)
-    return _generateOfflineAdvice(expenses, totalSpent, currencyFormat);
+    return _generateOfflineAdvice(items, totalIncome, totalExpense, netBalance, currencyFormat);
   }
 
   /// Thuật toán phân tích quy tắc tài chính Offline (Rule-based Heuristic)
   String _generateOfflineAdvice(
-    List<ExpenseItem> expenses,
-    double totalSpent,
+    List<ExpenseItem> items,
+    double totalIncome,
+    double totalExpense,
+    double netBalance,
     NumberFormat currencyFormat,
   ) {
-    // Tính tổng theo từng danh mục
+    final expenses = items.where((e) => e.isExpense).toList();
     final categoryTotals = <ExpenseCategory, double>{};
     for (final exp in expenses) {
       categoryTotals[exp.category] = (categoryTotals[exp.category] ?? 0) + exp.amount;
     }
 
-    // Tìm danh mục chiếm nhiều nhất
     ExpenseCategory topCategory = ExpenseCategory.other;
     double maxAmount = 0.0;
     categoryTotals.forEach((cat, amt) {
@@ -93,19 +96,23 @@ Hãy dùng phong cách động viên, gần gũi, súc tích bằng tiếng Vi�
       }
     });
 
-    final topPercentage = totalSpent > 0 ? (maxAmount / totalSpent * 100).toStringAsFixed(1) : '0';
+    final expensePercent = totalIncome > 0
+        ? (totalExpense / totalIncome * 100).toStringAsFixed(1)
+        : '100';
 
     return '''
 📶 **Chế độ phân tích Offline (Không cần Internet)**
 
-📊 **Tổng quan chi tiêu:**
-- Tổng ngân sách đã chi: ${currencyFormat.format(totalSpent)} trên ${expenses.length} giao dịch.
-- Khoản chi lớn nhất hiện tại thuộc danh mục: **${topCategory.vietnameseName}** với ${currencyFormat.format(maxAmount)} (chiếm $topPercentage%).
+📊 **Cán cân Thu - Chi:**
+- Tổng thu nhập: **${currencyFormat.format(totalIncome)}**
+- Tổng chi tiêu: **${currencyFormat.format(totalExpense)}** ($expensePercent% thu nhập)
+- Số dư ròng: **${currencyFormat.format(netBalance)}**
+- Khoản chi lớn nhất: **${topCategory.vietnameseName}** (${currencyFormat.format(maxAmount)}).
 
 💡 **Gợi ý tiết kiệm tiền tự động:**
-1. **Kiểm soát khoản "${topCategory.vietnameseName}"**: Hãy thử đặt hạn mức mỗi tuần cho nhóm này và giảm bớt 15-20% tần suất chi tiêu.
-2. **Áp dụng nguyên tắc 50/30/20**: 50% cho nhu cầu thiết yếu, 30% cho sở thích cá nhân, 20% gửi tiết kiệm ngay khi có nguồn thu.
-3. **Thói quen ghi chép liên tục**: Quét hóa đơn ngay sau khi mua sắm sẽ giúp bạn kiểm soát tâm lý chi tiêu ngoài kế hoạch.
+1. **Kiểm soát khoản "${topCategory.vietnameseName}"**: Đang chiếm tỷ trọng lớn nhất trong các khoản chi, hãy đặt hạn mức không vượt quá 30% thu nhập.
+2. **Quy tắc 50/30/20**: Dành 50% cho nhu cầu thiết yếu, 30% cho mục tiêu cá nhân, và trích ngay 20% (${currencyFormat.format(totalIncome * 0.2)}) vào quỹ tiết kiệm ngay khi có nguồn thu mới.
+3. **Thói quen ghi chép cả Thu lẫn Chi**: Giúp bạn luôn làm chủ dòng tiền ròng và tránh rơi vào trạng thái bội chi.
 
 *(Để nhận phân tích chi tiết bằng AI Generative, bạn có thể nhập Gemini API Key trong phần Cài đặt khi có kết nối Internet).*
 ''';

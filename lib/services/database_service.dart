@@ -15,12 +15,31 @@ class DatabaseService {
   // Bộ nhớ tạm trên Web (Fallback khi chạy trên Cloudflare Pages/Web)
   final List<ExpenseItem> _webItems = [
     ExpenseItem(
+      id: 'demo_income_1',
+      title: 'Lương trợ giảng VKU',
+      amount: 2500000.0,
+      timestamp: DateTime.now().subtract(const Duration(days: 3)),
+      category: ExpenseCategory.salary,
+      type: TransactionType.income,
+      rawOcrText: 'Cong ty chuyen khoan +2,500,000VND. Luong thang',
+    ),
+    ExpenseItem(
       id: 'demo_1',
       title: 'Highlands Coffee VKU',
       amount: 65000.0,
       timestamp: DateTime.now().subtract(const Duration(hours: 3)),
       category: ExpenseCategory.food,
+      type: TransactionType.expense,
       rawOcrText: 'HIGHLANDS COFFEE\nTong cong: 65.000 VND',
+    ),
+    ExpenseItem(
+      id: 'demo_income_2',
+      title: 'Ba mẹ gửi tiền sinh hoạt',
+      amount: 1500000.0,
+      timestamp: DateTime.now().subtract(const Duration(days: 4)),
+      category: ExpenseCategory.allowance,
+      type: TransactionType.income,
+      rawOcrText: 'TK 1234 +1,500,000VND tu HUYNH VAN B',
     ),
     ExpenseItem(
       id: 'demo_2',
@@ -28,6 +47,7 @@ class DatabaseService {
       amount: 50000.0,
       timestamp: DateTime.now().subtract(const Duration(days: 1)),
       category: ExpenseCategory.transport,
+      type: TransactionType.expense,
       rawOcrText: 'PETROLIMEX\nTong thanh toan: 50.000 đ',
     ),
     ExpenseItem(
@@ -36,6 +56,7 @@ class DatabaseService {
       amount: 120000.0,
       timestamp: DateTime.now().subtract(const Duration(days: 2)),
       category: ExpenseCategory.shopping,
+      type: TransactionType.expense,
       rawOcrText: 'NHA SACH VKU\nThanh tien: 120.000 đ',
     ),
   ];
@@ -55,8 +76,9 @@ class DatabaseService {
 
     return await openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: _createDB,
+      onUpgrade: _upgradeDB,
     );
   }
 
@@ -68,15 +90,24 @@ class DatabaseService {
         amount REAL NOT NULL,
         timestamp TEXT NOT NULL,
         category TEXT NOT NULL,
+        type TEXT NOT NULL DEFAULT 'expense',
         image_path TEXT,
         raw_ocr_text TEXT
       )
     ''');
   }
 
+  Future<void> _upgradeDB(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      try {
+        await db.execute("ALTER TABLE expenses ADD COLUMN type TEXT NOT NULL DEFAULT 'expense'");
+      } catch (_) {}
+    }
+  }
+
   // --- CÁC THAO TÁC CRUD CƠ BẢN ---
 
-  /// Thêm mới một khoản chi tiêu
+  /// Thêm mới một giao dịch (Thu hoặc Chi)
   Future<int> insertExpense(ExpenseItem item) async {
     if (kIsWeb) {
       _webItems.removeWhere((e) => e.id == item.id);
@@ -91,7 +122,7 @@ class DatabaseService {
     );
   }
 
-  /// Lấy danh sách tất cả các khoản chi, sắp xếp theo thời gian mới nhất trước
+  /// Lấy danh sách tất cả các giao dịch, sắp xếp theo thời gian mới nhất trước
   Future<List<ExpenseItem>> getAllExpenses() async {
     if (kIsWeb) {
       _webItems.sort((a, b) => b.timestamp.compareTo(a.timestamp));
@@ -106,7 +137,7 @@ class DatabaseService {
     return maps.map((map) => ExpenseItem.fromMap(map)).toList();
   }
 
-  /// Cập nhật thông tin chi tiêu sau khi người dùng sửa thủ công
+  /// Cập nhật thông tin giao dịch
   Future<int> updateExpense(ExpenseItem item) async {
     if (kIsWeb) {
       final idx = _webItems.indexWhere((e) => e.id == item.id);
@@ -124,7 +155,7 @@ class DatabaseService {
     );
   }
 
-  /// Xóa khoản chi tiêu theo ID
+  /// Xóa giao dịch theo ID
   Future<int> deleteExpense(String id) async {
     if (kIsWeb) {
       _webItems.removeWhere((e) => e.id == id);
@@ -140,20 +171,24 @@ class DatabaseService {
 
   // --- CÁC HÀM TRUY VẤN THỐNG KÊ PHỤC VỤ CUSTOM PAINTER CHARTS ---
 
-  /// Thống kê tỷ trọng chi tiêu theo từng danh mục (Dành cho Biểu đồ Donut Chart)
-  Future<Map<ExpenseCategory, double>> getCategoryBreakdown() async {
+  /// Thống kê tỷ trọng theo danh mục của một loại giao dịch (Chi tiêu hoặc Thu nhập)
+  Future<Map<ExpenseCategory, double>> getCategoryBreakdown({TransactionType? type}) async {
     if (kIsWeb) {
       final breakdown = <ExpenseCategory, double>{};
       for (final item in _webItems) {
-        breakdown[item.category] = (breakdown[item.category] ?? 0.0) + item.amount;
+        if (type == null || item.type == type) {
+          breakdown[item.category] = (breakdown[item.category] ?? 0.0) + item.amount;
+        }
       }
       return breakdown;
     }
 
     final db = await database;
+    final String whereClause = type != null ? "WHERE type = '${type.name}'" : '';
     final result = await db.rawQuery('''
       SELECT category, SUM(amount) as total
       FROM expenses
+      $whereClause
       GROUP BY category
     ''');
 
@@ -173,10 +208,12 @@ class DatabaseService {
 
     if (kIsWeb) {
       for (final item in _webItems) {
-        final diffDays = now.difference(item.timestamp).inDays;
-        final dayIndex = 6 - diffDays;
-        if (dayIndex >= 0 && dayIndex < 7) {
-          dailyTotals[dayIndex] = (dailyTotals[dayIndex] ?? 0.0) + item.amount;
+        if (item.isExpense) {
+          final diffDays = now.difference(item.timestamp).inDays;
+          final dayIndex = 6 - diffDays;
+          if (dayIndex >= 0 && dayIndex < 7) {
+            dailyTotals[dayIndex] = (dailyTotals[dayIndex] ?? 0.0) + item.amount;
+          }
         }
       }
       return dailyTotals;
@@ -189,7 +226,7 @@ class DatabaseService {
     final result = await db.rawQuery('''
       SELECT timestamp, amount
       FROM expenses
-      WHERE timestamp >= ?
+      WHERE timestamp >= ? AND type = 'expense'
     ''', [startDay.toIso8601String()]);
 
     for (final row in result) {

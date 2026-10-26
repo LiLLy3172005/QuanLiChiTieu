@@ -1,14 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import '../../models/expense_item.dart';
 import '../../providers/expense_provider.dart';
+import '../../services/platform_channel_service.dart';
 import '../../services/regex_parser_engine.dart';
 import '../widgets/expense_summary_card.dart';
 import '../widgets/review_dialog.dart';
 
-/// Màn hình chính quản lý chi tiêu (Theo Scaffold Architecture Slide 33 & 34 VKU)
+/// Màn hình chính quản lý Thu - Chi (Scaffold Architecture Slide 33 & 34 VKU)
 class ExpenseHomeScreen extends ConsumerStatefulWidget {
   const ExpenseHomeScreen({super.key});
 
@@ -18,6 +20,21 @@ class ExpenseHomeScreen extends ConsumerStatefulWidget {
 
 class _ExpenseHomeScreenState extends ConsumerState<ExpenseHomeScreen> {
   final ImagePicker _picker = ImagePicker();
+  int _filterIndex = 0; // 0: Tất cả, 1: Chi tiêu (-), 2: Thu nhập (+)
+  int _batteryLevel = -1;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkBattery();
+  }
+
+  Future<void> _checkBattery() async {
+    final level = await PlatformChannelService.getBatteryLevel();
+    if (mounted) {
+      setState(() => _batteryLevel = level);
+    }
+  }
 
   /// Xử lý chụp ảnh hóa đơn hoặc chọn ảnh từ bộ sưu tập
   Future<void> _handleScanReceipt(ImageSource source) async {
@@ -36,14 +53,13 @@ class _ExpenseHomeScreenState extends ConsumerState<ExpenseHomeScreen> {
             children: [
               CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
               SizedBox(width: 16),
-              Text('Đang xử lý hóa đơn...'),
+              Text('Đang quét OCR trên thiết bị (ML Kit)...'),
             ],
           ),
           duration: Duration(seconds: 2),
         ),
       );
 
-      // Gọi qua Riverpod Notifier để chạy Google ML Kit (hoặc Web fallback) & Regex Parser
       final parsed = await ref.read(expenseProvider.notifier).processImageWithOcr(imagePath);
 
       if (parsed != null && mounted) {
@@ -55,7 +71,13 @@ class _ExpenseHomeScreenState extends ConsumerState<ExpenseHomeScreen> {
             onSave: (newItem) {
               ref.read(expenseProvider.notifier).addExpense(newItem);
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Đã lưu chi tiêu vào CSDL Offline!')),
+                SnackBar(
+                  content: Text(
+                    newItem.isIncome
+                        ? 'Đã ghi nhận Khoản Thu vào CSDL!'
+                        : 'Đã lưu Khoản Chi vào CSDL!',
+                  ),
+                ),
               );
             },
           ),
@@ -70,18 +92,18 @@ class _ExpenseHomeScreenState extends ConsumerState<ExpenseHomeScreen> {
     }
   }
 
-  /// Cho phép dán văn bản tin nhắn biến động số dư ngân hàng (Vietcombank, MB, MoMo...)
+  /// Dán tin nhắn SMS biến động số dư ngân hàng (Tự động nhận diện Thu / Chi)
   void _handlePasteSms() {
     final textController = TextEditingController();
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Dán tin nhắn SMS ngân hàng'),
+        title: const Text('Dán tin nhắn SMS Ngân hàng'),
         content: TextField(
           controller: textController,
           maxLines: 4,
           decoration: const InputDecoration(
-            hintText: 'Ví dụ: TK 1234 SD: -65.000VND tai HIGHLANDS COFFEE...',
+            hintText: 'Ví dụ:\n- Chi: SD: -65.000VND tai HIGHLANDS...\n- Thu: SD: +2.000.000VND tu CTY ABC...',
             border: OutlineInputBorder(),
           ),
         ),
@@ -111,17 +133,62 @@ class _ExpenseHomeScreenState extends ConsumerState<ExpenseHomeScreen> {
     );
   }
 
+  /// Thêm thủ công nhanh
+  void _handleManualAdd() {
+    showDialog(
+      context: context,
+      builder: (_) => ReviewExpenseDialog(
+        initialData: (
+          merchant: '',
+          total: 0.0,
+          date: DateTime.now(),
+          category: ExpenseCategory.other,
+          type: TransactionType.expense,
+        ),
+        onSave: (item) {
+          ref.read(expenseProvider.notifier).addExpense(item);
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final expenseState = ref.watch(expenseProvider);
     final totalSpent = ref.watch(totalExpenseAmountProvider);
+    final totalIncome = ref.watch(totalIncomeProvider);
+    final netBalance = ref.watch(netBalanceProvider);
     final currencyFormatter = NumberFormat.currency(locale: 'vi_VN', symbol: 'đ');
+
+    // Lọc danh sách theo Tab
+    final filteredItems = expenseState.items.where((item) {
+      if (_filterIndex == 1) return item.isExpense;
+      if (_filterIndex == 2) return item.isIncome;
+      return true;
+    }).toList();
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('VKU Expense Tracker'),
+        title: const Text('VKU Expense & Income'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
+          if (_batteryLevel >= 0)
+            Padding(
+              padding: const EdgeInsets.only(right: 8.0),
+              child: Center(
+                child: Row(
+                  children: [
+                    const Icon(Icons.battery_std, size: 18),
+                    Text('$_batteryLevel%', style: const TextStyle(fontSize: 12)),
+                  ],
+                ),
+              ),
+            ),
+          IconButton(
+            icon: const Icon(Icons.add),
+            tooltip: 'Thêm giao dịch thủ công',
+            onPressed: _handleManualAdd,
+          ),
           IconButton(
             icon: const Icon(Icons.sms_outlined),
             tooltip: 'Phân tích SMS biến động số dư',
@@ -129,12 +196,11 @@ class _ExpenseHomeScreenState extends ConsumerState<ExpenseHomeScreen> {
           ),
         ],
       ),
-      // Body danh sách ảo hóa (Slide 38: ListView.builder)
       body: expenseState.isLoading
           ? const Center(child: CircularProgressIndicator())
           : Column(
               children: [
-                // Thẻ tóm tắt tổng số dư chi tiêu đầu trang
+                // 1. Thẻ Tóm tắt Số dư Ví & Cán cân Thu - Chi
                 Container(
                   width: double.infinity,
                   margin: const EdgeInsets.all(16),
@@ -158,64 +224,113 @@ class _ExpenseHomeScreenState extends ConsumerState<ExpenseHomeScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'Tổng chi tiêu tháng này',
+                        'Số dư ròng khả dụng (Net Balance)',
                         style: TextStyle(color: Colors.white70, fontSize: 13),
                       ),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 6),
                       Text(
-                        currencyFormatter.format(totalSpent),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 26,
+                        currencyFormatter.format(netBalance),
+                        style: TextStyle(
+                          color: netBalance >= 0 ? Colors.white : Colors.amberAccent,
+                          fontSize: 28,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '${expenseState.items.length} giao dịch được lưu cục bộ (SQLite)',
-                        style: const TextStyle(color: Colors.white60, fontSize: 12),
+                      const SizedBox(height: 14),
+                      const Divider(color: Colors.white24, height: 1),
+                      const SizedBox(height: 12),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          // Tổng thu
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(6),
+                                decoration: BoxDecoration(
+                                  color: Colors.green.withOpacity(0.25),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(Icons.arrow_upward, color: Colors.greenAccent, size: 16),
+                              ),
+                              const SizedBox(width: 8),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text('Tổng Thu', style: TextStyle(color: Colors.white70, fontSize: 11)),
+                                  Text(
+                                    currencyFormatter.format(totalIncome),
+                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+
+                          // Tổng chi
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(6),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.withOpacity(0.25),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(Icons.arrow_downward, color: Colors.redAccent, size: 16),
+                              ),
+                              const SizedBox(width: 8),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text('Tổng Chi', style: TextStyle(color: Colors.white70, fontSize: 11)),
+                                  Text(
+                                    currencyFormatter.format(totalSpent),
+                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ],
                       ),
                     ],
                   ),
                 ),
 
-                // Tiêu đề danh sách
+                // 2. Thanh lọc: Tất cả / Chi tiêu / Thu nhập
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Lịch sử chi tiêu',
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.bold,
-                            ),
-                      ),
-                      Text(
-                        'Vuốt để xóa',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: Colors.grey,
-                            ),
-                      ),
+                  child: SegmentedButton<int>(
+                    segments: const [
+                      ButtonSegment(value: 0, label: Text('Tất cả')),
+                      ButtonSegment(value: 1, label: Text('Khoản Chi')),
+                      ButtonSegment(value: 2, label: Text('Khoản Thu')),
                     ],
+                    selected: {_filterIndex},
+                    onSelectionChanged: (set) {
+                      setState(() => _filterIndex = set.first);
+                    },
                   ),
                 ),
 
-                // Danh sách chi tiết Virtualized ListView
+                const SizedBox(height: 6),
+
+                // 3. Danh sách giao dịch ảo hóa ListView.builder (Slide 38 VKU)
                 Expanded(
-                  child: expenseState.items.isEmpty
-                      ? const Center(
+                  child: filteredItems.isEmpty
+                      ? Center(
                           child: Text(
-                            'Chưa có khoản chi tiêu nào.\nHãy chụp hóa đơn để ghi lại nhé!',
+                            _filterIndex == 2
+                                ? 'Chưa có khoản thu nào.\nHãy thêm hoặc dán SMS nhận tiền nhé!'
+                                : 'Chưa có giao dịch nào.\nHãy quét hóa đơn để bắt đầu!',
                             textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.grey),
+                            style: const TextStyle(color: Colors.grey),
                           ),
                         )
                       : ListView.builder(
-                          itemCount: expenseState.items.length,
+                          itemCount: filteredItems.length,
                           itemBuilder: (context, index) {
-                            final item = expenseState.items[index];
-                            // Slide 24 & 38: Luôn gắn ValueKey(item.id) cho Dismissible
+                            final item = filteredItems[index];
                             return Dismissible(
                               key: ValueKey(item.id),
                               direction: DismissDirection.endToStart,
@@ -228,10 +343,7 @@ class _ExpenseHomeScreenState extends ConsumerState<ExpenseHomeScreen> {
                               onDismissed: (_) {
                                 ref.read(expenseProvider.notifier).removeExpense(item.id);
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('Đã xóa "${item.title}"'),
-                                    duration: const Duration(seconds: 2),
-                                  ),
+                                  SnackBar(content: Text('Đã xóa "${item.title}"')),
                                 );
                               },
                               child: ExpenseSummaryCard(
@@ -239,7 +351,11 @@ class _ExpenseHomeScreenState extends ConsumerState<ExpenseHomeScreen> {
                                 amount: item.amount,
                                 date: item.timestamp,
                                 category: item.category,
-                                onTap: () {},
+                                type: item.type,
+                                onTap: () {
+                                  // Điều hướng sang màn hình chi tiết qua GoRouter (Slide 22 VKU Week 8)
+                                  context.push('/expense/${item.id}');
+                                },
                               ),
                             );
                           },
@@ -248,7 +364,7 @@ class _ExpenseHomeScreenState extends ConsumerState<ExpenseHomeScreen> {
               ],
             ),
 
-      // FAB quét hóa đơn (Slide 34 VKU: FloatingActionButton.extended)
+      // FAB Quét hóa đơn (Slide 34)
       floatingActionButton: FloatingActionButton.extended(
         backgroundColor: const Color(0xFF2C4570),
         foregroundColor: Colors.white,

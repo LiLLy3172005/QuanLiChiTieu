@@ -5,7 +5,7 @@ import '../services/gemini_service.dart';
 import '../services/ocr_service.dart';
 import '../services/regex_parser_engine.dart';
 
-/// Trạng thái của toàn bộ luồng quản lý chi tiêu (State Pattern)
+/// Trạng thái của toàn bộ luồng quản lý chi tiêu & thu nhập (State Pattern)
 class ExpenseState {
   final List<ExpenseItem> items;
   final bool isLoading;
@@ -42,22 +42,27 @@ class ExpenseState {
   }
 }
 
-/// Riverpod 2 StateNotifier quản lý nghiệp vụ và trạng thái (Slide 42)
-class ExpenseNotifier extends StateNotifier<ExpenseState> {
-  final DatabaseService _db = DatabaseService.instance;
-  final OcrService _ocrService = OcrService();
+/// Riverpod 2 Notifier quản lý nghiệp vụ và trạng thái (Chuẩn Week 8 Slide 14 & 15 VKU)
+class ExpenseNotifier extends Notifier<ExpenseState> {
+  late final DatabaseService _db = DatabaseService.instance;
+  late final OcrService _ocrService = OcrService();
   GeminiService _geminiService = GeminiService();
 
-  ExpenseNotifier() : super(const ExpenseState()) {
-    loadAllExpenses();
+  @override
+  ExpenseState build() {
+    ref.onDispose(() {
+      _ocrService.dispose();
+    });
+    Future.microtask(() => loadAllExpenses());
+    return const ExpenseState();
   }
 
-  /// Cấu hình Gemini API key (nếu người dùng có key)
+  /// Cấu hình Gemini API key
   void setApiKey(String key) {
     _geminiService = GeminiService(apiKey: key);
   }
 
-  /// Tải toàn bộ danh sách chi tiêu từ SQLite (Offline)
+  /// Tải toàn bộ danh sách giao dịch từ SQLite / Web Storage
   Future<void> loadAllExpenses() async {
     state = state.copyWith(isLoading: true);
     try {
@@ -71,13 +76,11 @@ class ExpenseNotifier extends StateNotifier<ExpenseState> {
     }
   }
 
-  /// Quét ảnh bằng ML Kit OCR offline -> bóc tách qua Regex Engine -> trả về dữ liệu đề xuất
+  /// Quét ảnh bằng OCR -> bóc tách qua Regex Engine -> tự động xác định Thu / Chi
   Future<ParsedReceiptData?> processImageWithOcr(String imagePath) async {
     state = state.copyWith(isScanning: true);
     try {
-      // 1. Nhận diện chữ On-device ML Kit (hoặc Web simulator)
       final rawText = await _ocrService.recognizeTextFromImagePath(imagePath);
-      // 2. Chạy Dart Regex Engine
       final parsed = RegexParserEngine.parse(rawText);
       state = state.copyWith(isScanning: false);
       return parsed;
@@ -90,25 +93,25 @@ class ExpenseNotifier extends StateNotifier<ExpenseState> {
     }
   }
 
-  /// Thêm khoản chi mới vào SQLite và cập nhật UI ngay lập tức
+  /// Thêm giao dịch mới (Thu nhập hoặc Chi tiêu)
   Future<void> addExpense(ExpenseItem item) async {
     await _db.insertExpense(item);
     await loadAllExpenses();
   }
 
-  /// Xóa khoản chi
+  /// Xóa giao dịch
   Future<void> removeExpense(String id) async {
     await _db.deleteExpense(id);
     await loadAllExpenses();
   }
 
-  /// Cập nhật khoản chi
+  /// Cập nhật giao dịch
   Future<void> updateExpense(ExpenseItem item) async {
     await _db.updateExpense(item);
     await loadAllExpenses();
   }
 
-  /// Phân tích chi tiêu và hỏi cách tiết kiệm tiền qua Gemini AI
+  /// Phân tích tình hình tài chính tổng thể (Cả Thu & Chi) và hỏi mẹo tiết kiệm
   Future<void> requestAiAdvice({String? customPrompt}) async {
     state = state.copyWith(isAiLoading: true);
     try {
@@ -124,31 +127,56 @@ class ExpenseNotifier extends StateNotifier<ExpenseState> {
       );
     }
   }
-
-  @override
-  void dispose() {
-    _ocrService.dispose();
-    super.dispose();
-  }
 }
 
-/// Provider toàn cục cho ứng dụng
-final expenseProvider = StateNotifierProvider<ExpenseNotifier, ExpenseState>((ref) {
-  return ExpenseNotifier();
-});
+/// Provider toàn cục dạng Riverpod 2 Compile-Safe NotifierProvider (Slide 15 VKU)
+final expenseProvider = NotifierProvider<ExpenseNotifier, ExpenseState>(
+  ExpenseNotifier.new,
+);
 
-/// Provider tính tổng số tiền đã chi tiêu
+/// Provider tính tổng số tiền đã CHI TIÊU
 final totalExpenseAmountProvider = Provider<double>((ref) {
   final state = ref.watch(expenseProvider);
-  return state.items.fold(0.0, (sum, item) => sum + item.amount);
+  return state.items
+      .where((item) => item.isExpense)
+      .fold(0.0, (sum, item) => sum + item.amount);
 });
 
-/// Provider phân bổ chi tiêu theo danh mục (cho Donut Chart)
+/// Provider tính tổng số tiền THU NHẬP
+final totalIncomeProvider = Provider<double>((ref) {
+  final state = ref.watch(expenseProvider);
+  return state.items
+      .where((item) => item.isIncome)
+      .fold(0.0, (sum, item) => sum + item.amount);
+});
+
+/// Provider tính SỐ DƯ RÒNG = Tổng Thu - Tổng Chi
+final netBalanceProvider = Provider<double>((ref) {
+  final income = ref.watch(totalIncomeProvider);
+  final expense = ref.watch(totalExpenseAmountProvider);
+  return income - expense;
+});
+
+/// Provider phân bổ chi tiêu theo danh mục (cho Donut Chart Chi tiêu)
 final categoryBreakdownProvider = Provider<Map<ExpenseCategory, double>>((ref) {
   final state = ref.watch(expenseProvider);
   final map = <ExpenseCategory, double>{};
   for (final item in state.items) {
-    map[item.category] = (map[item.category] ?? 0.0) + item.amount;
+    if (item.isExpense) {
+      map[item.category] = (map[item.category] ?? 0.0) + item.amount;
+    }
+  }
+  return map;
+});
+
+/// Provider phân bổ thu nhập theo danh mục (cho Donut Chart Thu nhập)
+final incomeCategoryBreakdownProvider = Provider<Map<ExpenseCategory, double>>((ref) {
+  final state = ref.watch(expenseProvider);
+  final map = <ExpenseCategory, double>{};
+  for (final item in state.items) {
+    if (item.isIncome) {
+      map[item.category] = (map[item.category] ?? 0.0) + item.amount;
+    }
   }
   return map;
 });
@@ -160,11 +188,23 @@ final weeklyExpensesProvider = Provider<Map<int, double>>((ref) {
   final Map<int, double> daily = {for (int i = 0; i < 7; i++) i: 0.0};
 
   for (final item in state.items) {
-    final diff = now.difference(item.timestamp).inDays;
-    final dayIndex = 6 - diff;
-    if (dayIndex >= 0 && dayIndex < 7) {
-      daily[dayIndex] = (daily[dayIndex] ?? 0.0) + item.amount;
+    if (item.isExpense) {
+      final diff = now.difference(item.timestamp).inDays;
+      final dayIndex = 6 - diff;
+      if (dayIndex >= 0 && dayIndex < 7) {
+        daily[dayIndex] = (daily[dayIndex] ?? 0.0) + item.amount;
+      }
     }
   }
   return daily;
+});
+
+/// Family Provider tìm kiếm giao dịch theo ID (phục vụ GoRouter path parameters /expense/:id)
+final singleExpenseProvider = Provider.family<ExpenseItem?, String>((ref, id) {
+  final state = ref.watch(expenseProvider);
+  try {
+    return state.items.firstWhere((item) => item.id == id);
+  } catch (_) {
+    return null;
+  }
 });
